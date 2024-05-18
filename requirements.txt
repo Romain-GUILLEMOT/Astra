@@ -1,4 +1,12 @@
 fastapi
 requests
 openai
-ElevenLabs
+elevenlabs
+whisper
+starlette
+python-dotenv
+openai-whisper
+ setuptools-rust
+httpx
+sounddevice
+scipy

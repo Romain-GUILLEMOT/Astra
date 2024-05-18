@@ -3,3 +3,4 @@ response.wav
 speakerwav/wav.wav
 venv
 .env
+test.py

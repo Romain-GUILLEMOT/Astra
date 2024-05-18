@@ -1,15 +1,16 @@
 import time
 
+import httpx
 from elevenlabs import save
 from fastapi import FastAPI, File, UploadFile, Query
 from fastapi.responses import FileResponse
-import requests
 import openai
 import os
 from elevenlabs.client import ElevenLabs
 from starlette.responses import HTMLResponse
 from dotenv import load_dotenv
-
+import whisper
+import uuid
 
 load_dotenv()
 
@@ -24,21 +25,69 @@ clientTEXT = openai.OpenAI(
 
 HOME_ASSISTANT_URL = os.getenv("HOME_ASSITANT_URL")
 HOME_ASSISTANT_TOKEN = os.getenv("HOME_ASSISTANT_TOKEN")
+LANGUAGE = os.getenv("LANGUAGE")
+
+async def check_openai_token() -> bool:
+    api_key = os.getenv("OPENAI_KEY")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.get(os.getenv("OPENAI_KEY"), headers=headers)
+        return response.status_code == 200
+
+async def check_home_assistant_token() -> bool:
+    headers = {
+        "Authorization": f"Bearer {HOME_ASSISTANT_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.get(HOME_ASSISTANT_URL + "states", headers=headers)
+        return response.status_code == 200
+
+@app.on_event("startup")
+async def startup_event():
+    first = False
+    if not os.path.exists("/tmp/speech"):
+        os.makedirs("/tmp/speech")
+        first = True
+    if not os.path.exists("/tmp/result"):
+        os.makedirs("/tmp/result")
+        first = True
+    if first:
+        print("First launch detected. I'm going to download all AI models before continue...")
+        whisper.load_model(os.getenv("WHISPERMODEL"))
+        print("Model downloaded successfully.")
+
+    print("Test of HomeAssitant connexion")
+    connected = await check_home_assistant_token()
+    if not connected:
+        print("Failed to connect to HomeAssistant. Please check your configuration.")
+        exit(1)
+
+    print("Test of OpenAI connexion")
+    print("Connected to OpenAI successfully.")
+    connected = await check_openai_token()
+    if not connected:
+        print("Failed to connect to OpenAI. Please check your configuration.")
+        exit(1)
+    print("Connected to OpenAI successfully.")
+
 
 @app.post("/speech-to-action/")
 async def speech_to_action(file: UploadFile = File(...)):
-    audio_content = await file.read()
-    response = openai.Audio.transcribe(
-        model="whisper-1",
-        file=audio_content
-    )
+    file_id = str(uuid.uuid4())
+    temp_file_path = f"{file_id}.wav"
 
-    if 'text' in response:
-        text = response['text']
-    else:
-        return {"error": "Could not understand the audio"}
+    with open(temp_file_path, "wb") as temp_file:
+        temp_file.write(file.file.read())
 
-    return await process_text(text)
+    model = whisper.load_model(os.getenv("WHISPERMODEL"))
+    result = model.transcribe(temp_file_path, language=LANGUAGE)
+
+    os.remove(temp_file_path)
+
+    return await process_text(result)
 
 
 @app.post("/text-to-action/")
@@ -65,7 +114,7 @@ Demande: {text}
     start_time = time.time()
 
     response = clientTEXT.chat.completions.create(
-        model=os.getenv("GPTVERSION"),
+        model=os.getenv("GPTMODEL"),
         messages=[
             {"role": "system", "content": "Vous êtes un assistant vocal utile. Tes réponses doivent est consive courte et simple. Indique les piece de l'action ect. Tu dois faire toutes les actions que l'on te demande"},
             {"role": "user", "content": prompt}
